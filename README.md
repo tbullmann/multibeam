@@ -17,7 +17,7 @@ cd multibeam
 
 Using conda to create an environment ```multibeam``` and install the requirements:
 ```bash
-conda create -n multibeam python=2.7 pillow scipy h5py pyyaml scikit-image pandas
+conda create -n multibeam python=2.7 pillow scipy h5py pyyaml scikit-image pandas pyramid
 source activate multibeam
 pip install tifffile
 ```
