@@ -58,6 +58,26 @@ class ImageIterator:
             image_list.append(raw_image)
         return np.stack(image_list, axis=2)
 
+    @reify
+    def vignette(self):
+        return np.median(self.stack, axis=2)
+
+
+class ImageStack(ImageIterator):
+
+    def remove_focus_and_beam_artifact(self):
+        self.stack = self.stack - self.vignette[:, :, None] - np.median(self.stack, axis=(0, 1))[None, None, :] + 255
+        self.images = self.tiles.iterrows()
+        self.next = self.next_from_stack
+
+    def next_from_stack(self):
+        index, tile = self.images.next()
+        if tile is None:
+            raise StopIteration()
+        else:
+            raw_image = self.stack[:, :, index]
+            return raw_image, tile
+
 
 def show_dataset():
     ImageIterator(EXAMPLE_HEXAGON).plot()
@@ -67,7 +87,13 @@ def show_dataset():
 
 
 def load_stack():
-    print (ImageIterator(EXAMPLE_HEXAGON, prefix='image').stack.shape)
+    data = ImageStack(EXAMPLE_HEXAGON, prefix='thumbnail')
+    data.remove_focus_and_beam_artifact()
+    plt.imshow(data.vignette)
+    plt.show()
+    data.plot()
+    plt.autoscale()
+    plt.show()
 
 
 if __name__ == "__main__":
