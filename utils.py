@@ -62,13 +62,23 @@ class ImageIterator:
     def vignette(self):
         return np.median(self.stack, axis=2)
 
+    @reify
+    def offsets(self):
+        return np.median(self.stack, axis=(0, 1))
+
 
 class ImageStack(ImageIterator):
 
     def remove_focus_and_beam_artifact(self):
-        self.stack = self.stack - self.vignette[:, :, None] - np.median(self.stack, axis=(0, 1))[None, None, :] + 255
-        self.images = self.tiles.iterrows()
-        self.next = self.next_from_stack
+        """
+        The 'focus artifact' produces the same vignette in all tiles, whereas the 'beam artifact' (maybe an
+        'PMT artifact') is an offset for each tile.
+        """
+        self.stack = self.stack \
+                     - self.vignette[:, :, None] + 127 \
+                     - self.offsets[None, None, :] + 127
+        self.images = self.tiles.iterrows()   # Start new
+        self.next = self.next_from_stack   # Use the stack for plotting
 
     def next_from_stack(self):
         index, tile = self.images.next()
@@ -86,7 +96,7 @@ def show_dataset():
     plt.show()
 
 
-def load_stack():
+def show_dataset_cleaned():
     data = ImageStack(EXAMPLE_HEXAGON, prefix='thumbnail')
     data.remove_focus_and_beam_artifact()
     plt.imshow(data.vignette)
@@ -96,6 +106,11 @@ def load_stack():
     plt.show()
 
 
+def get_overlap():
+    """Use afterimages produced by previous imaging the adjacent hexagons"""
+    pass
+
+
 if __name__ == "__main__":
     show_dataset()
-    load_stack()
+    show_dataset_cleaned()

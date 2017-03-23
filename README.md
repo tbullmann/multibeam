@@ -30,7 +30,7 @@ ln -s ~/iclound/data/mbeam data
 ln -s ~/iclound/temp/mbeam temp
 ```
 
-### PyCarm
+### PyCharm
 
 Change project interpreter to ```multibeam``` environment.
 
