@@ -54,6 +54,7 @@ There is a particular numbering of the tiles according to their numbering of the
 |Indices|Overlap with other hexagons|
 |-------|--------|
 |0..36|none|
+|37|mixed|
 |38, 39, 40|upper left only|
 |41|mixed|
 |42, 43, 44|top only|
@@ -62,6 +63,6 @@ There is a particular numbering of the tiles according to their numbering of the
 |49|mixed|
 |50, 51, 52|lower right only|
 |53|mixed|
-|554, 5, 56|bottom only|
+|54, 55, 56|bottom only|
 |57, 58|mixed|
 |58, 59, 60|lower left only|
