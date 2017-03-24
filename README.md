@@ -38,8 +38,8 @@ Change project interpreter to ```multibeam``` environment.
 
 ### Beam indices
 
-There is a particular numbering of the tiles according to their numbering of the electron beam.
-![Beam indices](docs/beam_indices.png)
+There is a particular numbering of the tiles according to the numbering of the electron beams.
+![Beam indices](docs/beam_indices.jpg)
 
 |Indices|Position|
 |-------|--------|
