@@ -34,3 +34,34 @@ ln -s ~/iclound/temp/mbeam temp
 
 Change project interpreter to ```multibeam``` environment.
 
+## Notes
+
+### Beam indices
+
+There is a particular numbering of the tiles according to their numbering of the electron beam.
+![Beam indices](docs/beam_indices.png)
+
+|Indices|Position|
+|-------|--------|
+|0..36|inner|
+|37..41|upper left diagonal|
+|41..45|top|
+|45..49|upper right diagonal|
+|49..53|lower right diagonal|
+|53..57|bottom|
+|57..60,37|lower left diagonal|
+
+|Indices|Overlap with other hexagons|
+|-------|--------|
+|0..36|none|
+|38, 39, 40|upper left only|
+|41|mixed|
+|42, 43, 44|top only|
+|45|mixed|
+|46, 47, 48|upper right only|
+|49|mixed|
+|50, 51, 52|lower right only|
+|53|mixed|
+|554, 5, 56|bottom only|
+|57, 58|mixed|
+|58, 59, 60|lower left only|
