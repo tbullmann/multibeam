@@ -117,7 +117,23 @@ def show_dataset_cleaned():
 
 def get_overlap():
     """Use afterimages produced by previous imaging the adjacent hexagons"""
-    pass
+    data = ImageStack(EXAMPLE_HEXAGON, prefix='thumbnail')
+    data.remove_focus_and_beam_artifact()
+
+    sub_stack = data.stack[:, :, (46, 47, 48) ]  #  tiles from the upper left diagonal
+    image = np.median(sub_stack, axis=2)
+
+    grid = gs.GridSpec(2, 2, width_ratios=[1,3], height_ratios=[3,1])
+    ax = plt.subplot(grid[0,1])
+    axl = plt.subplot(grid[0,0], sharey=ax)
+    axb = plt.subplot(grid[1,1], sharex=ax)
+
+    axl.plot(np.mean(image, axis=1), xrange(image.shape[0]))
+    axb.plot(np.mean(image, axis=0))
+    ax.imshow(image, cmap='gray_r')
+    ax.axis('off')
+    plt.show()
+
 
 if __name__ == "__main__":
     show_dataset()
