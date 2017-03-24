@@ -79,6 +79,10 @@ class ImageIterator:
         """Median of each tile"""
         return np.median(self.stack, axis=(0, 1))
 
+    def coordinates(self, beam_index):
+        tile = self.tiles.loc[self.tiles['beam_index'] == beam_index]
+        return np.hstack([tile.y.values, tile.x.values])
+
 
 class ImageStack(ImageIterator):
 
@@ -143,7 +147,7 @@ def get_shift_by_afterimage():
     # TODO Extract shift from edges, e.g. in the marginal
 
 
-def get_shift_by_phase_correlation(upsample_factor=1, alpha=0.5):
+def get_shift_by_phase_correlation(upsample_factor=1, alpha=0.5, beam_index_A = 0, beam_index_B = 1):
     """Use phase correlation to identify the shift."""
 
     # # Modified from: http://scikit-image.org/docs/dev/auto_examples/transform/plot_register_translation.html
@@ -155,15 +159,20 @@ def get_shift_by_phase_correlation(upsample_factor=1, alpha=0.5):
     # offset_image = fourier_shift(np.fft.fftn(image), shift)
     # offset_image = np.fft.ifftn(offset_image).real
 
-    data = ImageStack(EXAMPLE_HEXAGON, prefix='image')
+    data = ImageStack(EXAMPLE_HEXAGON, prefix='thumbnail')
     data.remove_focus_and_beam_artifact()
-    image = data.stack[:, :, 0]
-    offset_image = data.stack[:, :, 1]
+    image = data.stack[:, :, beam_index_A]
+    offset_image = data.stack[:, :, beam_index_B]
+
+    known_shift = data.coordinates(beam_index_B) - data.coordinates(beam_index_A)
+    print("Known offset (y, x): {}".format(known_shift))
 
     shift, error, diffphase = register_translation(image, offset_image, upsample_factor=upsample_factor)
-    print("Offset (y, x): {}".format(shift))
+    print("Estimated offset (y, x): {}".format(shift))
 
     dy, dx = shift
+    # dy, dx = known_shift
+
     height, width = image.shape[0:2]
     plt.imshow(image, vmin=0, vmax=255, cmap='Blues_r', alpha=alpha,
                extent=[0, width, height, 0])
@@ -173,7 +182,7 @@ def get_shift_by_phase_correlation(upsample_factor=1, alpha=0.5):
     plt.autoscale()
     plt.show()
 
-    # TODO Test with images of adjacent hexagons (having a larger overlap, small overlap: FAIL)
+    # TODO Test with images of adjacent hexagons (having a larger overlap, because: FAIL with small overlap)
 
 
 if __name__ == "__main__":
