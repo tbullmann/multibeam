@@ -51,18 +51,18 @@ There is a particular numbering of the tiles according to their numbering of the
 |53..57|bottom|
 |57..60,37|lower left diagonal|
 
-|Indices|Overlap with other hexagons|
-|-------|--------|
-|0..36|none|
-|37|mixed|
-|38, 39, 40|upper left only|
-|41|mixed|
-|42, 43, 44|top only|
-|45|mixed|
-|46, 47, 48|upper right only|
-|49|mixed|
-|50, 51, 52|lower right only|
-|53|mixed|
-|54, 55, 56|bottom only|
-|57, 58|mixed|
-|58, 59, 60|lower left only|
+|Indices|Overlap with other hexagons|Others indices|
+|-------|--------|-------|
+|0..36|none| |
+|37|mixed| |
+|38, 39, 40|upper left only|52, 51, 50|
+|41|mixed| |
+|42, 43, 44|top only|56, 55, 54|
+|45|mixed| |
+|46, 47, 48|upper right only| 60, 59, 58|
+|49|mixed| |
+|50, 51, 52|lower right only| 40, 39, 38
+|53|mixed| |
+|54, 55, 56|bottom only|44, 43, 42|
+|57|mixed| |
+|58, 59, 60|lower left only|48, 47, 46|
