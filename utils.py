@@ -1,18 +1,18 @@
 import os
 import re
-import pandas as pd
-import numpy as np
-from scipy.misc import imread
-from matplotlib import pyplot as plt
-from matplotlib import gridspec as gs
-from skimage.feature import register_translation
 
+import numpy as np
+import pandas as pd
+from matplotlib import pyplot as plt
 from pyramid.decorator import reify
+from scipy.misc import imread
+from scipy.stats import threshold, pearsonr
+from skimage.feature import register_translation
 
 EXAMPLE_HEXAGON = 'data/000046'
 
 
-class ImageIterator:
+class Hexagon:
     def __init__(self, path, prefix='thumbnail'):
         """
         :param path: base path containing a file with coordinates and image filenames as well as images
@@ -29,19 +29,17 @@ class ImageIterator:
         self.tiles = pd.read_table(textfilename, names=['filename', 'x', 'y', 'z'])
         self.tiles['beam_index'] = self.tiles['filename'].map(lambda x: int(re.findall(r'\d+', x)[2])-1)
         self.tiles['file_index'] = self.tiles.index
-        self.images = self.tiles.iterrows()
+        self.tiles = self.tiles.sort_values(by='beam_index')
 
-    def __iter__(self):
-        return self
-
-    def next(self):
-        index, tile = self.images.next()
-        if tile is None:
-            raise StopIteration()
-        else:
+    @reify
+    def stack(self):
+        """Loading all images into a stack, sorted according to the beam_index"""
+        image_list = []
+        for _, tile in self.tiles.iterrows():
             fullfilename = os.path.join(self.path, tile.filename)
-            raw_image = imread(fullfilename, mode='L')   # Force gray scale
-            return raw_image, tile
+            raw_image = imread(fullfilename, mode='L')  # Force gray scale
+            image_list.append(raw_image)
+        return np.stack(image_list, axis=2)
 
     def plot(self, transform=None, cmap='gray_r', alpha=1):
         """
@@ -50,7 +48,8 @@ class ImageIterator:
         :param cmap: colormap; default: inverted gray scale
         :param alpha: transparency; default: 1 (not transparent)
         """
-        for raw_image, tile in self:
+        for _, tile in self.tiles.iterrows():
+            raw_image = self.stack[:, :, tile.beam_index]
             image = transform(raw_image) if transform else raw_image
             height, width = image.shape[0:2]
             plt.imshow(image,
@@ -60,14 +59,6 @@ class ImageIterator:
                        alpha=alpha,
                        extent=[tile.x, tile.x+width, tile.y+height, tile.y])
             plt.text(tile.x+width//2, tile.y+height//2, tile.beam_index)
-
-    @reify
-    def stack(self):
-        """Loading all images into a stack, sorted according to the beam_index"""
-        image_list = []
-        for raw_image, tile in self:
-            image_list.append(raw_image)
-        return np.stack(image_list, axis=2)[:, :, np.argsort(self.tiles['beam_index'])]
 
     @reify
     def vignette(self):
@@ -83,9 +74,6 @@ class ImageIterator:
         tile = self.tiles.loc[self.tiles['beam_index'] == beam_index]
         return np.hstack([tile.y.values, tile.x.values])
 
-
-class ImageStack(ImageIterator):
-
     def remove_focus_and_beam_artifact(self):
         """
         The 'focus artifact' produces the same vignette in all tiles, whereas the 'beam artifact' (maybe an
@@ -94,21 +82,129 @@ class ImageStack(ImageIterator):
         self.stack = self.stack - self.offsets[None, None, :] + 127
         self.stack = self.stack - self.vignette[:, :, None] + 127
         self.images = self.tiles.iterrows()   # Start new
-        self.next = self.next_from_stack   # Use the stack for plotting
 
-    def next_from_stack(self):
-        index, tile = self.images.next()
-        if tile is None:
-            raise StopIteration()
-        else:
-            raw_image = self.stack[:, :, tile.beam_index]
-            return raw_image, tile
+    @reify
+    def overlaps(self):
+        height, width, _ = self.stack.shape
+        x = self.tiles.x
+        y = self.tiles.y
+        overlaps, n = pairwise_overlaps(height, width, x, y)
+        assert any(n < 7)  # every tile has less than 7 neighbors
+        assert overlaps.shape[0] == (37*6 + 6*3*4 + 6*3)/2  # 37 inner tile, 6*3 on the edges, 6 on the corners with 6, 4, 3 neightbors, respectively
+
+        def adjust_overlap(overlap):  # Adjust overlap by phase correlation
+            imageA, imageB = overlapping_parts_of_image_pair(round(overlap.dx), round(overlap.dy),
+                                              self.stack[:, :, overlap.i], self.stack[:, :, overlap.j])
+            shift, _, _ = register_translation(imageB, imageA, upsample_factor=1)
+            ddy, ddx = shift
+            return pd.Series({'dy': round(ddy), 'dx': round(ddx)})
+
+        adjusted = overlaps.apply(adjust_overlap, axis=1)
+        overlaps.dy += adjusted.dy
+        overlaps.dx += adjusted.dx
+
+        print overlaps
+
+        return overlaps
+
+
+def pairwise_overlaps(height, width, x, y):
+    """
+    :param height, width: size of a single image
+    :param x, y: coordinates of the images
+    :return: panda DataFrame with
+        i, j: pairwise indices of the images with non zero overlap
+        A: overlap area for image pair with indices i and j
+    """
+
+    dx = x[:, None] - x[None, :]
+    dy = y[:, None] - y[None, :]
+
+    ox = threshold(width - abs(dx), 0)
+    oy = threshold(height - abs(dy), 0)
+
+    A = ox * oy
+
+    non_zero_overlap = A > 0  # use only nonzero overlap
+    np.fill_diagonal(non_zero_overlap, False)  # discard i==j because same overlap with itself
+
+    n = np.sum(non_zero_overlap, axis=0)
+
+    non_zero_overlap &= np.tri(*non_zero_overlap.shape).astype(bool)  # discard i<j because redundancy, A(i,j) = A(j,i)
+
+    i, j = np.where(non_zero_overlap)
+    A = np.array([A[index] for index in zip(i, j)])
+    dx = np.array([dx[index] for index in zip(i, j)])
+    dy = np.array([dy[index] for index in zip(i, j)])
+
+    overlaps = pd.DataFrame({'i': i, 'j': j, 'dx': dx, 'dy': dy, 'A': A}).sort_values(by='A', ascending=False)
+
+    return overlaps, n
+
+
+def overlapping_parts_of_image_pair(dx, dy, imageA, imageB):
+    """
+    :param dx, dy: translation
+    :param imageA, imageB: two images
+    :return: images parts that overlap
+    """
+
+    height, width = imageA.shape[0:2]
+    if dx > 0:
+        imageA = imageA[:, :width - dx]
+        imageB = imageB[:, dx:]
+    else:
+        imageA = imageA[:, -dx:]
+        imageB = imageB[:, :width + dx]
+    if dy > 0:
+        imageA = imageA[:height - dy, :]
+        imageB = imageB[dy:, :]
+    else:
+        imageA = imageA[-dy:, :]
+        imageB = imageB[:height + dy, :]
+
+    return imageA, imageB
+
+
+def snr_from_corr(x, y):
+    """
+    Estimate signal to noise ratio from two different versions of the same signal contaminated by uncorrelated noise,
+    using the sample cross-correlation coefficient (Pearson correlation coefficient).
+    Note: Frank and Al-Ali, 1975, Nature
+    :param x, y: 1D arrays
+    :return: snr: signal to noise ratio
+    """
+    N = len(x)
+    r_N, _ = pearsonr(x, y)
+    if N > 10000:
+        snr = r_N / (1 - r_N)
+    else:
+        snr = np.exp(-2/(N-3))*(r_N/(1-r_N)+1/2)-1/2
+    return snr
+
+
+def add_snr_from_overlap(data):
+
+    def snr_from_overlap(overlap):
+        imageA = data.stack[:, :, overlap.i]
+        imageB = data.stack[:, :, overlap.j]
+
+        dx = round(overlap.dx)
+        dy = round(overlap.dy)
+        # print("Given translation: dy = %1.1f, dx = %1.1f)" % (dy, dx))
+
+        imageA, imageB = overlapping_parts_of_image_pair(dx, dy,
+                                                         imageA, imageB)
+        snr = snr_from_corr(imageA.ravel(), imageB.ravel())
+        return snr
+
+    data.overlaps['snr'] = data.overlaps.apply(snr_from_overlap, axis=1)
 
 
 def show_dataset():
     """Show single hexagon both as thumbnails and (full resolution) image"""
-    ImageIterator(EXAMPLE_HEXAGON).plot()
-    # ImageIterator('data/000046', prefix='image').plot()  # slow
+    Hexagon(EXAMPLE_HEXAGON).plot()
+    # Hexagon(EXAMPLE_HEXAGON, prefix='image').plot()  # slow
     plt.autoscale()
     plt.axis('off')
     plt.show()
@@ -116,7 +212,7 @@ def show_dataset():
 
 def show_dataset_cleaned():
     """Show how to clean up the images"""
-    data = ImageStack(EXAMPLE_HEXAGON, prefix='thumbnail')
+    data = Hexagon(EXAMPLE_HEXAGON, prefix='thumbnail')
     data.remove_focus_and_beam_artifact()
     plt.imshow(data.vignette, cmap='gray_r')
     plt.show()
@@ -125,68 +221,58 @@ def show_dataset_cleaned():
     plt.show()
 
 
-def get_shift_by_afterimage():
-    """Use afterimages produced by previous imaging the adjacent hexagons"""
-    data = ImageStack(EXAMPLE_HEXAGON, prefix='thumbnail')
+def snr_by_frank():
+    """"""
+    data = Hexagon(EXAMPLE_HEXAGON, prefix='thumbnail')
     data.remove_focus_and_beam_artifact()
+    add_snr_from_overlap(data)
 
-    sub_stack = data.stack[:, :, (46, 47, 48) ]  #  tiles from the upper left diagonal
-    image = np.median(sub_stack, axis=2)
+    print data.overlaps.snr
 
-    grid = gs.GridSpec(2, 2, width_ratios=[1,3], height_ratios=[3,1])
-    ax = plt.subplot(grid[0,1])
-    axl = plt.subplot(grid[0,0], sharey=ax)
-    axb = plt.subplot(grid[1,1], sharex=ax)
+    ax1 = plt.subplot(121)
+    plt.hist(data.overlaps.snr, bins=50)
+    plt.title('distribution for %d pairs of tiles' % data.overlaps.shape[0])
+    plt.xlabel('snr')
+    plt.ylabel('count')
 
-    axl.plot(np.mean(image, axis=1), xrange(image.shape[0]))
-    axb.plot(np.mean(image, axis=0))
-    ax.imshow(image, cmap='gray_r')
-    ax.axis('off')
+    ax2 = plt.subplot(122)
+    plt.hist(np.log(data.overlaps.snr), bins=50)
+    plt.title('distribution for %d pairs of tiles' % data.overlaps.shape[0])
+    plt.xlabel('log snr')
+    plt.ylabel('count')
+
     plt.show()
 
-    # TODO Extract shift from edges, e.g. in the marginal
+    for _, overlap in data.overlaps.iterrows():
 
+        imageA, imageB = overlapping_parts_of_image_pair(round(overlap.dx), round(overlap.dy),
+                                          data.stack[:, :, overlap.i], data.stack[:, :, overlap.j])
+        ax1 = plt.subplot(141)
+        ax1.imshow(imageA, cmap='gray_r')
+        plt.title('Tile %d' % overlap.i)
+        plt.axis('off')
 
-def get_shift_by_phase_correlation(upsample_factor=1, alpha=0.5, beam_index_A = 0, beam_index_B = 1):
-    """Use phase correlation to identify the shift."""
+        ax2 = plt.subplot(142)
+        ax2.imshow(imageB, cmap='gray_r')
+        plt.title('Tile %d' % overlap.j)
+        plt.axis('off')
 
-    # # Modified from: http://scikit-image.org/docs/dev/auto_examples/transform/plot_register_translation.html
-    # from skimage import data
-    # from scipy.ndimage import fourier_shift
-    # image = data.camera()
-    # shift = (-22.4, 13.32)
-    # # The shift corresponds to the pixel offset relative to the reference image
-    # offset_image = fourier_shift(np.fft.fftn(image), shift)
-    # offset_image = np.fft.ifftn(offset_image).real
+        ax3 = plt.subplot(143)
+        mean = (imageA + imageB) / 2
+        ax3.imshow(mean, cmap='gray_r')
+        plt.title('Mean')
+        plt.axis('off')
 
-    data = ImageStack(EXAMPLE_HEXAGON, prefix='thumbnail')
-    data.remove_focus_and_beam_artifact()
-    image = data.stack[:, :, beam_index_A]
-    offset_image = data.stack[:, :, beam_index_B]
+        ax4 = plt.subplot(144)
+        diff = (imageA - np.mean(imageA)) - (imageB - np.mean(imageB))
+        ax4.imshow(diff, cmap='gray_r')
+        plt.title('Difference')
+        plt.axis('off')
 
-    known_shift = data.coordinates(beam_index_B) - data.coordinates(beam_index_A)
-    print("Known offset (y, x): {}".format(known_shift))
-
-    shift, error, diffphase = register_translation(image, offset_image, upsample_factor=upsample_factor)
-    print("Estimated offset (y, x): {}".format(shift))
-
-    dy, dx = shift
-    # dy, dx = known_shift
-
-    height, width = image.shape[0:2]
-    plt.imshow(image, vmin=0, vmax=255, cmap='Blues_r', alpha=alpha,
-               extent=[0, width, height, 0])
-    plt.imshow(offset_image, vmin=0, vmax=255, cmap='Reds_r', alpha=alpha,
-               extent=[dx, dx+width, dy+height, dy])
-
-    plt.autoscale()
-    plt.show()
-
-    # TODO Test with images of adjacent hexagons (having a larger overlap, because: FAIL with small overlap)
+        plt.show()
 
 
 if __name__ == "__main__":
-    show_dataset()
-    show_dataset_cleaned()
-    get_shift_by_afterimage()
-    get_shift_by_phase_correlation()
+    # show_dataset()
+    # show_dataset_cleaned()
+    snr_by_frank()
