@@ -8,8 +8,10 @@ from pyramid.decorator import reify
 from scipy.misc import imread
 from scipy.stats import threshold, pearsonr
 from skimage.feature import register_translation
+from numpy.fft import fft, ifft
 
 EXAMPLE_HEXAGON = 'data/000046'
+EXAMPLE_HEXAGON = 'data/000007'
 
 
 class Hexagon:
@@ -223,7 +225,7 @@ def show_dataset_cleaned():
 
 def snr_by_frank():
     """"""
-    data = Hexagon(EXAMPLE_HEXAGON, prefix='thumbnail')
+    data = Hexagon(EXAMPLE_HEXAGON, prefix='image')
     data.remove_focus_and_beam_artifact()
     add_snr_from_overlap(data)
 
@@ -271,8 +273,60 @@ def snr_by_frank():
 
         plt.show()
 
+def snr_by_kim():
+
+    data = Hexagon(EXAMPLE_HEXAGON, prefix='thumbnail')
+    data.remove_focus_and_beam_artifact()
+
+    data.tiles['snr'] = data.tiles.beam_index.apply(lambda x: snr_from_autocorr(data.stack[:,:,x]))
+    print data.tiles.snr
+
+    ax1 = plt.subplot(121)
+    plt.hist(data.tiles.snr, bins=25)
+    plt.title('distribution for %d tiles' % data.tiles.shape[0])
+    plt.xlabel('snr')
+    plt.ylabel('count')
+
+    ax2 = plt.subplot(122)
+    plt.hist(np.log(data.tiles.snr), bins=25)
+    plt.title('distribution for %d tiles' % data.tiles.shape[0])
+    plt.xlabel('log snr')
+    plt.ylabel('count')
+
+    plt.show()
+
+    for beam_index in data.tiles.beam_index:
+        img = data.stack[:,:,beam_index]
+
+        imgFT = fft(img - np.mean(img), axis=1)
+        imgAC = ifft(imgFT * np.conjugate(imgFT), axis=1).real
+        AC = np.median(imgAC, axis=0)
+
+        ax1 = plt.subplot(121)
+        ax1.imshow(img, cmap='gray_r')
+        plt.title('Tile %d' % beam_index)
+        plt.axis('off')
+
+        plt.subplot(143)
+        plt.plot(imgAC.T, color='gray')
+        plt.plot(AC, color='blue', label='median AC')
+        plt.legend()
+        plt.xlim(0,10)
+        plt.xlabel('lag')
+
+        plt.show()
+
+
+def snr_from_autocorr(img):
+    imgFT = fft(img - np.mean(img), axis=1)
+    imgAC = ifft(imgFT * np.conjugate(imgFT), axis=1).real
+    AC = np.median(imgAC, axis=0)
+    snr = (AC[1] - AC[len(AC)//2]) / (AC[0] - AC[1])
+    return snr
+
 
 if __name__ == "__main__":
     # show_dataset()
     # show_dataset_cleaned()
-    snr_by_frank()
+    # snr_by_frank()
+    snr_by_kim()
