@@ -4,14 +4,15 @@ import re
 import numpy as np
 import pandas as pd
 from matplotlib import pyplot as plt
+import matplotlib.patches as patches
+import matplotlib.cm as cm
 from pyramid.decorator import reify
 from scipy.misc import imread
-from scipy.stats import threshold, pearsonr
+from scipy.stats import threshold
 from skimage.feature import register_translation
-from numpy.fft import fft, ifft
 
-EXAMPLE_HEXAGON = 'data/000046'
-EXAMPLE_HEXAGON = 'data/000007'
+EXAMPLE_HEXAGON_HIPPOCAMPUS = 'data/000046'
+EXAMPLE_HEXAGON_CORTEX = 'data/000007'
 
 
 class Hexagon:
@@ -60,7 +61,19 @@ class Hexagon:
                        cmap=cmap,
                        alpha=alpha,
                        extent=[tile.x, tile.x+width, tile.y+height, tile.y])
-            plt.text(tile.x+width//2, tile.y+height//2, tile.beam_index)
+        plt.autoscale()
+
+    def plot_tiles(self, beam_indices=range(0, 62)):
+        height, width, _ = self.stack.shape
+        ax = plt.gca()
+        colors = iter(cm.rainbow(np.linspace(0, 1, len(beam_indices))))
+        for _, tile in self.tiles.iterrows():
+            if tile.beam_index in beam_indices:
+                color = next(colors)
+                ax.add_patch(patches.Rectangle((tile.x, tile.y), width, height, color=color, fill=False))
+                plt.text(tile.x + width // 2, tile.y + height // 2, tile.beam_index, color=color,
+                         horizontalalignment='center', verticalalignment='center')
+        plt.autoscale()
 
     @reify
     def vignette(self):
@@ -90,32 +103,45 @@ class Hexagon:
         height, width, _ = self.stack.shape
         x = self.tiles.x
         y = self.tiles.y
-        overlaps, n = pairwise_overlaps(height, width, x, y)
+        registrations, n = pairwise_registrations(height, width, x, y)
         assert any(n < 7)  # every tile has less than 7 neighbors
-        assert overlaps.shape[0] == (37*6 + 6*3*4 + 6*3)/2  # 37 inner tile, 6*3 on the edges, 6 on the corners with 6, 4, 3 neightbors, respectively
+        assert registrations.shape[0] == (37*6 + 6*3*4 + 6*3)/2  # 37 inner tile, 6*3 on the edges, 6 on the corners with 6, 4, 3 neightbors, respectively
 
-        def adjust_overlap(overlap):  # Adjust overlap by phase correlation
-            imageA, imageB = overlapping_parts_of_image_pair(round(overlap.dx), round(overlap.dy),
-                                              self.stack[:, :, overlap.i], self.stack[:, :, overlap.j])
+        def adjust(registration):  # Adjust overlap by phase correlation
+            imageA, imageB = overlap_from_registration(int(round(registration.dx)), int(round(registration.dy)),
+                                                       self.stack[:, :, int(registration.i)],
+                                                       self.stack[:, :, int(registration.j)])
             shift, _, _ = register_translation(imageB, imageA, upsample_factor=1)
             ddy, ddx = shift
-            return pd.Series({'dy': round(ddy), 'dx': round(ddx)})
+            return pd.Series({'dy': int(round(ddy)), 'dx': int(round(ddx))})
 
-        adjusted = overlaps.apply(adjust_overlap, axis=1)
-        overlaps.dy += adjusted.dy
-        overlaps.dx += adjusted.dx
+        adjusted = registrations.apply(adjust, axis=1)
 
-        print overlaps
+        registrations.dy += adjusted.dy
+        registrations.dx += adjusted.dx
 
-        return overlaps
+        image_pairs = []
+        index_pairs = []
+        for registration in registrations.itertuples():
+            imageA = self.stack[:, :, registration.i]
+            imageB = self.stack[:, :, registration.j]
+            dx = registration.dx
+            dy = registration.dy
+            image_pairs.append(overlap_from_registration(dx, dy, imageA, imageB))
+            index_pairs.append((registration.i, registration.j))
+
+        return image_pairs, index_pairs
 
 
-def pairwise_overlaps(height, width, x, y):
+# static functions for image registration
+
+def pairwise_registrations(height, width, x, y):
     """
     :param height, width: size of a single image
     :param x, y: coordinates of the images
     :return: panda DataFrame with
         i, j: pairwise indices of the images with non zero overlap
+        dx, dy: displacement between the images with image i and j
         A: overlap area for image pair with indices i and j
     """
 
@@ -139,12 +165,15 @@ def pairwise_overlaps(height, width, x, y):
     dx = np.array([dx[index] for index in zip(i, j)])
     dy = np.array([dy[index] for index in zip(i, j)])
 
-    overlaps = pd.DataFrame({'i': i, 'j': j, 'dx': dx, 'dy': dy, 'A': A}).sort_values(by='A', ascending=False)
+    registrations = pd.DataFrame({'i': i, 'j': j,
+                                  'dx': dx.astype(int), 'dy': dy.astype(int),
+                                  'A': A}
+                                 ).sort_values(by='A', ascending=False)
 
-    return overlaps, n
+    return registrations, n
 
 
-def overlapping_parts_of_image_pair(dx, dy, imageA, imageB):
+def overlap_from_registration(dx, dy, imageA, imageB):
     """
     :param dx, dy: translation
     :param imageA, imageB: two images
@@ -168,165 +197,19 @@ def overlapping_parts_of_image_pair(dx, dy, imageA, imageB):
     return imageA, imageB
 
 
-def snr_from_corr(x, y):
-    """
-    Estimate signal to noise ratio from two different versions of the same signal contaminated by uncorrelated noise,
-    using the sample cross-correlation coefficient (Pearson correlation coefficient).
-    Note: Frank and Al-Ali, 1975, Nature
-    :param x, y: 1D arrays
-    :return: snr: signal to noise ratio
-    """
-    N = len(x)
-    r_N, _ = pearsonr(x, y)
-    if N > 10000:
-        snr = r_N / (1 - r_N)
-    else:
-        snr = np.exp(-2/(N-3))*(r_N/(1-r_N)+1/2)-1/2
-    return snr
-
-
-def add_snr_from_overlap(data):
-
-    def snr_from_overlap(overlap):
-        imageA = data.stack[:, :, overlap.i]
-        imageB = data.stack[:, :, overlap.j]
-
-        dx = round(overlap.dx)
-        dy = round(overlap.dy)
-        # print("Given translation: dy = %1.1f, dx = %1.1f)" % (dy, dx))
-
-        imageA, imageB = overlapping_parts_of_image_pair(dx, dy,
-                                                         imageA, imageB)
-        snr = snr_from_corr(imageA.ravel(), imageB.ravel())
-        return snr
-
-    data.overlaps['snr'] = data.overlaps.apply(snr_from_overlap, axis=1)
-
-
 def show_dataset():
-    """Show single hexagon both as thumbnails and (full resolution) image"""
-    Hexagon(EXAMPLE_HEXAGON).plot()
-    # Hexagon(EXAMPLE_HEXAGON, prefix='image').plot()  # slow
-    plt.autoscale()
+    """
+    Show single hexagon both as thumbnails with tile outline and beam index
+    Note: Plotting as full resolution image is slow
+    """
+    # Plot all tiles on top
+    data = Hexagon(EXAMPLE_HEXAGON_CORTEX)  # Hexagon(EXAMPLE_HEXAGON, prefix='image')
+    data.remove_focus_and_beam_artifact()
+    data.plot()
+    data.plot_tiles()
     plt.axis('off')
     plt.show()
 
 
-def show_dataset_cleaned():
-    """Show how to clean up the images"""
-    data = Hexagon(EXAMPLE_HEXAGON, prefix='thumbnail')
-    data.remove_focus_and_beam_artifact()
-    plt.imshow(data.vignette, cmap='gray_r')
-    plt.show()
-    data.plot()
-    plt.autoscale()
-    plt.show()
-
-
-def snr_by_frank():
-    """"""
-    data = Hexagon(EXAMPLE_HEXAGON, prefix='image')
-    data.remove_focus_and_beam_artifact()
-    add_snr_from_overlap(data)
-
-    print data.overlaps.snr
-
-    ax1 = plt.subplot(121)
-    plt.hist(data.overlaps.snr, bins=50)
-    plt.title('distribution for %d pairs of tiles' % data.overlaps.shape[0])
-    plt.xlabel('snr')
-    plt.ylabel('count')
-
-    ax2 = plt.subplot(122)
-    plt.hist(np.log(data.overlaps.snr), bins=50)
-    plt.title('distribution for %d pairs of tiles' % data.overlaps.shape[0])
-    plt.xlabel('log snr')
-    plt.ylabel('count')
-
-    plt.show()
-
-    for _, overlap in data.overlaps.iterrows():
-
-        imageA, imageB = overlapping_parts_of_image_pair(round(overlap.dx), round(overlap.dy),
-                                          data.stack[:, :, overlap.i], data.stack[:, :, overlap.j])
-        ax1 = plt.subplot(141)
-        ax1.imshow(imageA, cmap='gray_r')
-        plt.title('Tile %d' % overlap.i)
-        plt.axis('off')
-
-        ax2 = plt.subplot(142)
-        ax2.imshow(imageB, cmap='gray_r')
-        plt.title('Tile %d' % overlap.j)
-        plt.axis('off')
-
-        ax3 = plt.subplot(143)
-        mean = (imageA + imageB) / 2
-        ax3.imshow(mean, cmap='gray_r')
-        plt.title('Mean')
-        plt.axis('off')
-
-        ax4 = plt.subplot(144)
-        diff = (imageA - np.mean(imageA)) - (imageB - np.mean(imageB))
-        ax4.imshow(diff, cmap='gray_r')
-        plt.title('Difference')
-        plt.axis('off')
-
-        plt.show()
-
-def snr_by_kim():
-
-    data = Hexagon(EXAMPLE_HEXAGON, prefix='thumbnail')
-    data.remove_focus_and_beam_artifact()
-
-    data.tiles['snr'] = data.tiles.beam_index.apply(lambda x: snr_from_autocorr(data.stack[:,:,x]))
-    print data.tiles.snr
-
-    ax1 = plt.subplot(121)
-    plt.hist(data.tiles.snr, bins=25)
-    plt.title('distribution for %d tiles' % data.tiles.shape[0])
-    plt.xlabel('snr')
-    plt.ylabel('count')
-
-    ax2 = plt.subplot(122)
-    plt.hist(np.log(data.tiles.snr), bins=25)
-    plt.title('distribution for %d tiles' % data.tiles.shape[0])
-    plt.xlabel('log snr')
-    plt.ylabel('count')
-
-    plt.show()
-
-    for beam_index in data.tiles.beam_index:
-        img = data.stack[:,:,beam_index]
-
-        imgFT = fft(img - np.mean(img), axis=1)
-        imgAC = ifft(imgFT * np.conjugate(imgFT), axis=1).real
-        AC = np.median(imgAC, axis=0)
-
-        ax1 = plt.subplot(121)
-        ax1.imshow(img, cmap='gray_r')
-        plt.title('Tile %d' % beam_index)
-        plt.axis('off')
-
-        plt.subplot(143)
-        plt.plot(imgAC.T, color='gray')
-        plt.plot(AC, color='blue', label='median AC')
-        plt.legend()
-        plt.xlim(0,10)
-        plt.xlabel('lag')
-
-        plt.show()
-
-
-def snr_from_autocorr(img):
-    imgFT = fft(img - np.mean(img), axis=1)
-    imgAC = ifft(imgFT * np.conjugate(imgFT), axis=1).real
-    AC = np.median(imgAC, axis=0)
-    snr = (AC[1] - AC[len(AC)//2]) / (AC[0] - AC[1])
-    return snr
-
-
 if __name__ == "__main__":
-    # show_dataset()
-    # show_dataset_cleaned()
-    # snr_by_frank()
-    snr_by_kim()
+    show_dataset()
