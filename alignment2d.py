@@ -3,12 +3,12 @@ from matplotlib import gridspec as gs
 from matplotlib import pyplot as plt
 from skimage.feature import register_translation
 
-from utils import Hexagon, EXAMPLE_HEXAGON
+from utils import Hexagon, EXAMPLE_HEXAGON_HIPPOCAMPUS
 
 
 def get_shift_by_afterimage():
     """Use afterimages produced by previous imaging the adjacent hexagons"""
-    data = Hexagon(EXAMPLE_HEXAGON, prefix='thumbnail')
+    data = Hexagon(EXAMPLE_HEXAGON_HIPPOCAMPUS, prefix='thumbnail')
     data.remove_focus_and_beam_artifact()
 
     sub_stack = data.stack[:, :, (46, 47, 48) ]  #  tiles from the upper left diagonal
@@ -40,7 +40,7 @@ def get_shift_by_phase_correlation(upsample_factor=1, alpha=0.5, beam_index_A = 
     # offset_image = fourier_shift(np.fft.fftn(image), shift)
     # offset_image = np.fft.ifftn(offset_image).real
 
-    data = Hexagon(EXAMPLE_HEXAGON, prefix='thumbnail')
+    data = Hexagon(EXAMPLE_HEXAGON_HIPPOCAMPUS, prefix='thumbnail')
     data.remove_focus_and_beam_artifact()
     image = data.stack[:, :, beam_index_A]
     offset_image = data.stack[:, :, beam_index_B]
